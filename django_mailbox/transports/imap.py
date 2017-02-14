@@ -52,9 +52,9 @@ class ImapTransport(EmailTransport):
         typ, msg = self.server.login(username, password)
 
         if self.folder:
-            self.server.select(self.folder)
+            self.server.select(self.folder, readonly=True)
         else:
-            self.server.select()
+            self.server.select(readonly=True)
 
     def _get_all_message_ids(self):
         # Fetch all the message uids
@@ -132,6 +132,7 @@ class ImapTransport(EmailTransport):
             if self.archive:
                 self.server.uid('copy', uid, self.archive)
 
-            self.server.uid('store', uid, "+FLAGS", "(\\Deleted)")
+            # For the moment, do not automatically delete remote messages
+            # self.server.uid('store', uid, "+FLAGS", "(\\Deleted)")
         self.server.expunge()
         return
