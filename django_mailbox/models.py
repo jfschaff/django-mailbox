@@ -7,7 +7,8 @@ Models declaration for application ``django_mailbox``.
 
 from email.encoders import encode_base64
 from email.message import Message as EmailMessage
-from email.utils import formatdate, parseaddr
+from email.utils import formatdate, parseaddr, parsedate_tz
+import datetime as dt
 from quopri import encode as encode_quopri
 import base64
 import email
@@ -42,6 +43,26 @@ class ActiveMailboxManager(models.Manager):
         return super(ActiveMailboxManager, self).get_queryset().filter(
             active=True,
         )
+
+
+class Label(models.Model):
+    """" labels attached to messages, as in Gmail. Each message can have
+    many labels. The state of the message (SENT, INBOX, etc.) is also stored
+    by using reserved labels (same approach as Gmail).
+    """
+    id = models.CharField(
+        _('Label'),
+        max_length=50,
+        primary_key=True,
+        null=False,
+        unique=True
+    )
+
+    # def __unicode__(self):
+    #     return self.id
+
+    def __str__(self):
+        return self.id
 
 
 class Mailbox(models.Model):
@@ -225,7 +246,14 @@ class Mailbox(models.Model):
     def process_incoming_message(self, message):
         """Process a message incoming to this mailbox."""
         msg = self._process_message(message)
+
+        # mark the message as incomming
         msg.outgoing = False
+
+        # mark the message as incomming with labels instead of bool variable
+        msg.labels.add(Label.objects.get(pk='INBOX'))
+        logger.debug("Label '{}' added to incoming message.".format('INBOX'))
+
         msg.save()
 
         message_received.send(sender=self, message=msg)
@@ -371,6 +399,35 @@ class Mailbox(models.Model):
                 )[0]
             except IndexError:
                 pass
+
+        # save timestamp in model
+        if 'Date' in message:
+            try:
+                dt_tuple = parsedate_tz(message['Date'])
+                time_zone = dt.timezone(dt.timedelta(seconds=dt_tuple[9]))
+                msg.date_time = dt.datetime(*dt_tuple[0:6], tzinfo=time_zone)
+            except AttributeError:
+                # this happens when the 'Date' header has a local format, e.g.
+                # when the date is written in french, as in
+                # 'ven., 10 févr. 2017 05:07:01 +0100'. This should be
+                # fixed, but for the moment, the date is replaced by the date
+                # when the message object was created.
+                log_str = \
+                    "'Date' header of email could not be interpreted:\n" \
+                    "To: {}\n" \
+                    "Subject: {}\n" \
+                    "Date: {}\n" \
+                    "using email object creation date instead in database.".format(
+                        message['To'],
+                        message['Subject'],
+                        message['Date']
+                    )
+                print(log_str)
+                logger.warning(log_str)
+
+        # populate plaintext field
+        msg.plaintext = msg.text
+
         msg.save()
         return msg
 
@@ -390,8 +447,20 @@ class Mailbox(models.Model):
             self.save()
         return new_mail
 
-    def __unicode__(self):
-        return self.name
+    # def __unicode__(self):
+    #     return self.name
+
+    def __str__(self):
+        return '{} ({})'.format(self.name, self.uri)
+
+    def __init__(self, *args, **kwargs):
+        """Create default labels when mailbox is created"""
+        super(Mailbox, self).__init__(*args, **kwargs)
+        default_labels = ['SENT', 'INBOX', 'UNREAD']
+        for label in default_labels:
+            new, created = Label.objects.get_or_create(pk=label)
+            if created:
+                logger.debug("New label '{}' created.".format(label))
 
     class Meta:
         verbose_name_plural = "Mailboxes"
@@ -419,11 +488,21 @@ class UnreadMessageManager(models.Manager):
 
 
 class Message(models.Model):
+    """An email message."""
+
     mailbox = models.ForeignKey(
         Mailbox,
         related_name='messages',
         verbose_name=_(u'Mailbox'),
     )
+    """Mailbox the email message belongs to."""
+
+    labels = models.ManyToManyField(
+        Label,
+        related_name='messages',
+        related_query_name='message'
+    )
+    """Message labels, just like in Gmail."""
 
     subject = models.CharField(
         _(u'Subject'),
@@ -468,6 +547,13 @@ class Message(models.Model):
         help_text=_('True if the e-mail body is Base64 encoded'),
     )
 
+    # plain text part of the message (converted to utf-8)
+    plaintext = models.TextField(
+        _(u'Text'),
+        default='',
+        blank=True
+    )
+
     processed = models.DateTimeField(
         _('Processed'),
         auto_now_add=True
@@ -478,6 +564,13 @@ class Message(models.Model):
         default=None,
         blank=True,
         null=True,
+    )
+
+    # date and time. Same as in the message's 'Date' header (may contain time
+    # zone)
+    date_time = models.DateTimeField(
+        _('Date and Time'),
+        auto_now_add=True
     )
 
     eml = models.FileField(
@@ -659,6 +752,19 @@ class Message(models.Model):
         self.encoded = True
         self.body = base64.b64encode(body).decode('ascii')
 
+    # def get_plaintext(self):
+    #     """Returns the `plaintext` field of this record. Set to '' (empty
+    #     string) if the record has no plain text part.
+    #     """
+    #     return self.plaintext
+    #     pass
+    #
+    # def set_plaintext(self):
+    #     """Sets the `plaintext` field of this record. Set to '' (empty
+    #     string) if the record has no plain text part.
+    #     """
+    #     pass
+
     def get_email_object(self):
         """Returns an `email.message.Message` instance representing the
         contents of this message and all attachments.
@@ -771,3 +877,5 @@ class MessageAttachment(models.Model):
 
     def __unicode__(self):
         return self.document.url
+
+

@@ -11,7 +11,7 @@ import logging
 from django.conf import settings
 from django.contrib import admin
 
-from django_mailbox.models import MessageAttachment, Message, Mailbox
+from django_mailbox.models import MessageAttachment, Message, Mailbox, Label
 from django_mailbox.signals import message_received
 from django_mailbox.utils import convert_header_to_unicode
 
@@ -35,6 +35,10 @@ def resend_message_received_signal(message_admin, request, queryset):
 resend_message_received_signal.short_description = (
     'Re-send message received signal'
 )
+
+
+class LabelAdmin(admin.ModelAdmin):
+    list_display = ('id',)
 
 
 class MailboxAdmin(admin.ModelAdmin):
@@ -72,6 +76,10 @@ class MessageAdmin(admin.ModelAdmin):
             [('%s: %s' % (h, v)) for h, v in email.items()]
         )
 
+    def message_labels(self, msg):
+        return "\n".join([label.id for label in msg.labels.all()])
+
+
     inlines = [
         MessageAttachmentInline,
     ]
@@ -82,6 +90,7 @@ class MessageAdmin(admin.ModelAdmin):
         'mailbox',
         'outgoing',
         'attachment_count',
+        'date_time',
     )
     ordering = ['-processed']
     list_filter = (
@@ -92,11 +101,13 @@ class MessageAdmin(admin.ModelAdmin):
     )
     exclude = (
         'body',
+        # 'labels',
     )
     raw_id_fields = (
         'in_reply_to',
     )
     readonly_fields = (
+        'message_labels',
         'envelope_headers',
         'text',
         'html',
@@ -107,3 +118,4 @@ if getattr(settings, 'DJANGO_MAILBOX_ADMIN_ENABLED', True):
     admin.site.register(Message, MessageAdmin)
     admin.site.register(MessageAttachment, MessageAttachmentAdmin)
     admin.site.register(Mailbox, MailboxAdmin)
+    admin.site.register(Label, LabelAdmin)
